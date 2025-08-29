@@ -126,55 +126,126 @@ class ModularStdioMCPServer {
         }
       },
       {
-        name: 'query_trading_memories',
-        description: 'Search the PostgreSQL memory database for relevant trading insights and past analysis (Legacy)',
+        name: 'emit_event',
+        description: 'Store trading analysis or insights using the Event Memory System with AI context extraction',
         inputSchema: {
           type: 'object',
           properties: {
-            query: {
+            user_command: {
               type: 'string',
-              description: 'Search query for trading memories'
+              description: 'User command like "push this", "save this analysis", "remember this"'
             },
-            limit: {
-              type: 'integer',
-              description: 'Maximum number of memories to return',
-              default: 5,
-              minimum: 1,
-              maximum: 20
+            conversation_context: {
+              type: 'object',
+              description: 'Context from recent conversation',
+              properties: {
+                recent_symbols: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Recently mentioned ticker symbols (used for topic extraction)'
+                },
+                agent_reasoning: {
+                  type: 'string',
+                  description: 'Agent analysis or reasoning to store'
+                },
+                parameters_used: {
+                  type: 'object',
+                  description: 'Parameters like price levels, timeframes, etc.'
+                },
+                confidence_indicators: {
+                  type: 'object',
+                  description: 'Data quality and confidence metrics'
+                }
+              }
+            },
+            session_id: {
+              type: 'string',
+              description: 'Session ID for conversation correlation'
+            },
+            type_hint: {
+              type: 'string',
+              description: 'Optional event type hint (analysis/proposal/insight/observation)'
+            },
+            symbol_override: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Override symbols to store (optional)'
             }
           },
-          required: ['query']
+          required: ['user_command', 'conversation_context', 'session_id']
         }
       },
       {
-        name: 'store_trading_memory',
-        description: 'Save new trading analysis or recommendations to the PostgreSQL memory database (Legacy)',
+        name: 'get_events',
+        description: 'Retrieve stored events from the Event Memory System with filtering and search',
         inputSchema: {
           type: 'object',
           properties: {
-            title: {
+            event_key: {
               type: 'string',
-              description: 'Concise title for the memory'
+              description: 'Specific event by correlation key'
             },
-            content: {
+            event_id: {
               type: 'string',
-              description: 'Detailed content of the trading insight'
+              description: 'Specific event by UUID'
             },
-            importance_score: {
-              type: 'number',
-              description: 'Importance score from 0.0 to 1.0',
-              minimum: 0.0,
-              maximum: 1.0,
-              default: 0.5
+            filters: {
+              type: 'object',
+              description: 'Filtering options',
+              properties: {
+                topic: {
+                  type: 'string',
+                  description: 'Filter by topic (e.g., "SBET", "market_analysis", "earnings_season")'
+                },
+                symbols: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Filter by ticker symbols'
+                },
+                event_types: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Filter by event types',
+                  enum: ['analysis', 'proposal', 'insight', 'observation']
+                },
+                categories: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Filter by categories'
+                },
+                min_confidence: {
+                  type: 'number',
+                  description: 'Minimum confidence threshold (0.0-1.0)'
+                },
+                hours_back: {
+                  type: 'integer',
+                  description: 'Time window in hours (default: 168 = 1 week)',
+                  default: 168
+                },
+                session_id: {
+                  type: 'string',
+                  description: 'Filter by specific session ID'
+                }
+              }
             },
-            relevance_tags: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Relevant tags for future searching',
-              default: []
+            limit: {
+              type: 'integer',
+              description: 'Maximum number of results (default: 10, max: 50)',
+              default: 10,
+              maximum: 50
+            },
+            sort_by: {
+              type: 'string',
+              description: 'Sort order',
+              enum: ['timestamp', 'confidence', 'relevance'],
+              default: 'timestamp'
+            },
+            include_cross_references: {
+              type: 'boolean',
+              description: 'Include cross-reference information',
+              default: false
             }
-          },
-          required: ['title', 'content']
+          }
         }
       }
     ];
@@ -196,12 +267,12 @@ class ModularStdioMCPServer {
           result = await this.getMarketDataModular(args.symbols, args.include_technical);
           break;
         
-        case 'query_trading_memories':
-          result = await this.queryTradingMemoriesLegacy(args.query, args.limit);
+        case 'emit_event':
+          result = await this.emitEventModular(args);
           break;
         
-        case 'store_trading_memory':
-          result = await this.storeTradingMemoryLegacy(args);
+        case 'get_events':
+          result = await this.getEventsModular(args);
           break;
         
         default:
@@ -263,11 +334,151 @@ class ModularStdioMCPServer {
     }
   }
 
+  /**
+   * NEW EVENT MEMORY SYSTEM: Modular approach with MVP3 CLI scripts
+   */
+  async emitEventModular(args) {
+    try {
+      this.logToStderr('🔄 Storing event with Event Memory System');
+      
+      const scriptPath = path.join(this.scriptsDir, 'emit_event.py');
+      
+      // Generate a session ID if not provided
+      const sessionId = args.session_id || `session-${Date.now()}`;
+      
+      // Create temporary context file
+      const tempContextFile = path.join(this.scriptsDir, `temp_context_${Date.now()}.json`);
+      require('fs').writeFileSync(tempContextFile, JSON.stringify(args.conversation_context, null, 2));
+      
+      const scriptArgs = [
+        scriptPath,
+        '--user-command', args.user_command,
+        '--session-id', sessionId,
+        '--context-file', tempContextFile,
+        '--json'
+      ];
+      
+      // Add optional parameters
+      if (args.type_hint) {
+        scriptArgs.push('--type-hint', args.type_hint);
+      }
+      
+      if (args.symbol_override && args.symbol_override.length > 0) {
+        scriptArgs.push('--symbols', ...args.symbol_override);
+      }
+      
+      this.logToStderr(`📞 Calling: python ${scriptPath} --user-command "${args.user_command}" --session-id ${sessionId}`);
+      
+      const result = await this.runPythonCLI(scriptArgs, 'emit_event');
+      
+      // Clean up temp file
+      try {
+        require('fs').unlinkSync(tempContextFile);
+      } catch (cleanupError) {
+        this.logToStderr(`⚠️ Could not clean up temp file: ${cleanupError.message}`);
+      }
+      
+      this.logToStderr('✅ Event storage completed');
+      return result;
+      
+    } catch (error) {
+      this.logToStderr(`❌ Event storage failed: ${error.message}`);
+      
+      return {
+        success: false,
+        error: error.message,
+        user_command: args.user_command
+      };
+    }
+  }
+
+  async getEventsModular(args) {
+    try {
+      this.logToStderr('🔄 Retrieving events with Event Memory System');
+      
+      const scriptPath = path.join(this.scriptsDir, 'get_events.py');
+      
+      const scriptArgs = [
+        scriptPath,
+        '--json'
+      ];
+      
+      // Add optional parameters
+      if (args.event_key) {
+        scriptArgs.push('--event-key', args.event_key);
+      }
+      
+      if (args.event_id) {
+        scriptArgs.push('--event-id', args.event_id);
+      }
+      
+      if (args.filters) {
+        const filters = args.filters;
+        
+        if (filters.topic) {
+          scriptArgs.push('--topic', filters.topic);
+        }
+        
+        if (filters.symbols && filters.symbols.length > 0) {
+          scriptArgs.push('--symbols', ...filters.symbols);
+        }
+        
+        if (filters.event_types && filters.event_types.length > 0) {
+          scriptArgs.push('--types', ...filters.event_types);
+        }
+        
+        if (filters.categories && filters.categories.length > 0) {
+          scriptArgs.push('--categories', ...filters.categories);
+        }
+        
+        if (filters.min_confidence !== undefined) {
+          scriptArgs.push('--min-confidence', filters.min_confidence.toString());
+        }
+        
+        if (filters.hours_back !== undefined) {
+          scriptArgs.push('--hours-back', filters.hours_back.toString());
+        }
+        
+        if (filters.session_id) {
+          scriptArgs.push('--session-id', filters.session_id);
+        }
+      }
+      
+      if (args.limit !== undefined) {
+        scriptArgs.push('--limit', args.limit.toString());
+      }
+      
+      if (args.sort_by) {
+        scriptArgs.push('--sort-by', args.sort_by);
+      }
+      
+      if (args.include_cross_references) {
+        scriptArgs.push('--include-cross-references');
+      }
+      
+      this.logToStderr(`📞 Calling: python ${scriptPath} with filters`);
+      
+      const result = await this.runPythonCLI(scriptArgs, 'get_events');
+      
+      this.logToStderr('✅ Event retrieval completed');
+      return result;
+      
+    } catch (error) {
+      this.logToStderr(`❌ Event retrieval failed: ${error.message}`);
+      
+      return {
+        events: [],
+        total_found: 0,
+        error: error.message
+      };
+    }
+  }
+
 
   /**
-   * LEGACY APPROACHES: Keep for memory tools until we migrate them
+   * UTILITY METHODS: Common functionality for all tools
    */
-  async queryTradingMemoriesLegacy(query, limit = 5) {
+  async runPythonCLI(scriptArgs, toolName) {
     this.logToStderr('⚠️ Using legacy approach for memory queries (TODO: migrate to CLI script)');
     
     // For now, use the proven generated script approach from backup

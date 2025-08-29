@@ -1,362 +1,367 @@
--- Simplified PostgreSQL Schema for Agentic Options Trading Bot
--- Single logical flow: Sessions -> Deliberations -> Actions -> Memories
+-- MVP3 Unified Events Schema for Swing Sage Trading Platform
+-- User-triggered, context-aware memory system built on unified event engine
 -- Note: Database creation is handled by setup_database.py
 
--- Drop existing objects (for teardown and reset)
+-- Drop existing objects (for teardown and reset)  
+DROP VIEW IF EXISTS analysis_performance CASCADE;
+DROP VIEW IF EXISTS recent_performance CASCADE;
+DROP VIEW IF EXISTS portfolio_overview CASCADE;
 DROP VIEW IF EXISTS session_timeline CASCADE;
 DROP VIEW IF EXISTS session_summary CASCADE;
+DROP VIEW IF EXISTS current_session_summary CASCADE;
+DROP VIEW IF EXISTS recent_events CASCADE;
+DROP VIEW IF EXISTS event_summary CASCADE;
+DROP VIEW IF EXISTS session_activity CASCADE;
 
-DROP TABLE IF EXISTS market_data CASCADE;
-DROP TABLE IF EXISTS technical_indicators CASCADE; 
-DROP TABLE IF EXISTS options_data CASCADE;
+-- Drop ribs tables (portfolio projections)
+DROP TABLE IF EXISTS v_analyses CASCADE;
+DROP TABLE IF EXISTS v_funding CASCADE;
+DROP TABLE IF EXISTS v_portfolio_snapshots CASCADE;
+DROP TABLE IF EXISTS v_trades CASCADE;
+DROP TABLE IF EXISTS v_positions CASCADE;
+
+-- Legacy tables removed - market data now comes from real-time IBKR API
+-- DROP TABLE IF EXISTS market_data CASCADE;
+-- DROP TABLE IF EXISTS technical_indicators CASCADE; 
+-- DROP TABLE IF EXISTS options_data CASCADE;
 DROP TABLE IF EXISTS agent_actions CASCADE;
 DROP TABLE IF EXISTS agent_memories CASCADE;
 DROP TABLE IF EXISTS agent_deliberations CASCADE;
 DROP TABLE IF EXISTS agent_sessions CASCADE;
+DROP TABLE IF EXISTS events CASCADE;
 
 -- Extension for UUID generation
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================================================
--- CORE AGENT SYSTEM TABLES
+-- MVP3 UNIFIED EVENT SYSTEM
 -- ============================================================================
 
--- Trading sessions - top level container
-CREATE TABLE agent_sessions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    ended_at TIMESTAMP WITH TIME ZONE,
-    status VARCHAR(50) DEFAULT 'active', -- active, completed, error
-    metadata JSONB DEFAULT '{}'
-);
-
--- Agent deliberations - ALL agent thinking/reasoning in ONE table
-CREATE TABLE agent_deliberations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id UUID REFERENCES agent_sessions(id),
+-- Single events table - unified and flexible (topic-based)
+CREATE TABLE events (
+    event_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    ts_event TIMESTAMP WITH TIME ZONE NOT NULL,
+    ts_recorded TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    event_type VARCHAR(50) NOT NULL,        -- 'analysis' | 'proposal' | 'insight' | 'observation'
+    category VARCHAR(100),                   -- 'price_check' | 'swing_setup' | 'earnings' | 'risk_mgmt' | etc.
+    session_id VARCHAR(255) NOT NULL,       -- Conversation correlation
+    event_key VARCHAR(500) NOT NULL,        -- Stable correlation key
+    sequence_num INTEGER NOT NULL,          -- Event ordering within session
+    topic VARCHAR(255) NOT NULL,            -- Main subject: 'SBET', 'market_volatility', 'earnings_season'
+    symbols TEXT[],                         -- Optional ticker symbols related to topic
+    confidence_score DECIMAL(3,2),          -- 0.00 to 1.00
+    payload JSONB NOT NULL,                 -- Event-specific data
+    cross_references UUID[],                -- Related event IDs
+    labels TEXT[],                          -- Optional tags
     
-    -- Agent and flow tracking
-    agent_type VARCHAR(50) NOT NULL, -- planner, executor, reflector
-    cycle_number INTEGER NOT NULL,
-    deliberation_step INTEGER NOT NULL, -- allows multi-turn conversations
-    parent_deliberation_id UUID REFERENCES agent_deliberations(id), -- for conversations
-    
-    -- Context and reasoning
-    input_context JSONB NOT NULL, -- what the agent received as input
-    reasoning TEXT NOT NULL, -- the agent's thinking process
-    decision JSONB, -- structured decision/conclusion (if any)
-    confidence_score DECIMAL(3,2), -- 0.00 to 1.00
-    
-    -- Deliberation type and scope (expanded from agent_reflections)
-    deliberation_type VARCHAR(100) DEFAULT 'decision', -- decision, analysis, reflection, debate
-    scope VARCHAR(100), -- trade_planning, risk_assessment, performance_review, etc.
-    analyzed_period_start TIMESTAMP WITH TIME ZONE, -- for reflections
-    analyzed_period_end TIMESTAMP WITH TIME ZONE,   -- for reflections
-    
-    -- Memory integration
-    referenced_memories UUID[], -- array of memory IDs referenced
-    created_memories UUID[], -- array of memory IDs created
-    
-    -- Performance and insights (from agent_reflections)
-    performance_metrics JSONB DEFAULT '{}',
-    insights TEXT, -- key insights generated
-    lessons_learned TEXT[], -- actionable lessons
-    recommended_adjustments JSONB DEFAULT '{}',
-    
-    -- Timing and metadata
-    started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    completed_at TIMESTAMP WITH TIME ZONE,
-    processing_time_ms INTEGER,
-    
-    -- LLM metadata
-    llm_model VARCHAR(100),
-    prompt_tokens INTEGER,
-    completion_tokens INTEGER,
-    metadata JSONB DEFAULT '{}'
-);
-
--- Agent actions - concrete actions taken by any agent
-CREATE TABLE agent_actions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id UUID REFERENCES agent_sessions(id),
-    deliberation_id UUID REFERENCES agent_deliberations(id), -- which deliberation led to this
-    
-    -- Action details
-    action_type VARCHAR(100) NOT NULL, -- place_order, cancel_order, query_data, create_memory
-    action_data JSONB NOT NULL,
-    expected_outcome JSONB,
-    
-    -- Execution tracking
-    status VARCHAR(50) DEFAULT 'planned', -- planned, executing, completed, failed
-    started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    completed_at TIMESTAMP WITH TIME ZONE,
-    
-    -- Results
-    actual_outcome JSONB,
-    success BOOLEAN,
-    error_message TEXT,
-    
-    -- External system integration
-    external_id VARCHAR(255), -- broker order ID, API call ID, etc.
-    external_system VARCHAR(100) -- moomoo, yahoo_finance, etc.
-);
-
--- Agent memories - persistent knowledge
-CREATE TABLE agent_memories (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id UUID REFERENCES agent_sessions(id),
-    source_deliberation_id UUID REFERENCES agent_deliberations(id),
-    
-    -- Memory classification
-    memory_type VARCHAR(50) NOT NULL, -- short_term, long_term, episodic
-    memory_category VARCHAR(100), -- market_conditions, trade_outcome, strategy_lesson
-    
-    -- Content
-    title VARCHAR(500) NOT NULL,
-    content TEXT NOT NULL,
-    structured_data JSONB DEFAULT '{}',
-    
-    -- Memory metadata
-    importance_score DECIMAL(3,2) DEFAULT 0.50, -- 0.00 to 1.00
-    relevance_tags TEXT[],
-    
-    -- Lifecycle
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    last_accessed TIMESTAMP WITH TIME ZONE,
-    access_count INTEGER DEFAULT 0,
-    expires_at TIMESTAMP WITH TIME ZONE, -- for short-term memories
-    
-    -- Vector embedding for semantic search (future)
-    -- embedding VECTOR(1536), -- disabled on Windows
-    related_memories UUID[]
+    -- Constraints
+    UNIQUE(session_id, sequence_num),       -- Session event ordering
+    CHECK(event_type IN ('analysis', 'proposal', 'insight', 'observation')),
+    CHECK(confidence_score BETWEEN 0.0 AND 1.0)
 );
 
 -- ============================================================================
--- MARKET DATA TABLES
+-- LEGACY MARKET DATA TABLES (REMOVED)
+-- ============================================================================
+-- All market data now comes from real-time IBKR API via get_market_data.py
+-- 
+-- REMOVED TABLES:
+-- - market_data: Real-time prices/volumes fetched fresh, not stored
+-- - technical_indicators: RSI, MACD, EMAs calculated by IBKR API  
+-- - options_data: Greeks, IV, strikes available through IBKR when needed
+--
+-- Why removed: Trading requires real-time data, not stale database snapshots
+
+-- ============================================================================
+-- PERFORMANCE INDEXES
 -- ============================================================================
 
--- Real-time market data for individual symbols
-CREATE TABLE market_data (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+CREATE INDEX idx_events_key ON events(event_key);
+CREATE INDEX idx_events_type_time ON events(event_type, ts_event DESC);
+CREATE INDEX idx_events_topic ON events(topic, ts_event DESC);
+CREATE INDEX idx_events_symbols ON events USING GIN(symbols);
+CREATE INDEX idx_events_session_time ON events(session_id, ts_event DESC);
+CREATE INDEX idx_events_category ON events(event_type, category, ts_event DESC);
+CREATE INDEX idx_events_topic_category ON events(topic, category, ts_event DESC);
+CREATE INDEX idx_events_confidence ON events(confidence_score DESC, ts_event DESC);
+CREATE INDEX idx_events_cross_refs ON events USING GIN(cross_references);
+
+-- REMOVED: Indexes for deleted market data tables
+-- (No longer needed since market data comes from real-time IBKR API)
+
+-- ============================================================================
+-- PORTFOLIO RIBS: DOMAIN PROJECTIONS FROM SPINE EVENTS
+-- ============================================================================
+
+-- Portfolio positions derived from events
+CREATE TABLE v_positions (
+    position_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     symbol VARCHAR(10) NOT NULL,
-    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    shares INTEGER NOT NULL DEFAULT 0,
+    avg_cost DECIMAL(10,2),
+    current_value DECIMAL(12,2),
+    unrealized_pnl DECIMAL(12,2),
+    realized_pnl DECIMAL(12,2),
+    sector VARCHAR(50),
+    first_entry TIMESTAMP WITH TIME ZONE,
+    last_activity TIMESTAMP WITH TIME ZONE,
+    source_events UUID[],  -- Spine event IDs that created this position
     
-    -- Price data
-    current_price DECIMAL(10,4) NOT NULL,
-    open_price DECIMAL(10,4),
-    high_price DECIMAL(10,4), 
-    low_price DECIMAL(10,4),
-    previous_close DECIMAL(10,4),
-    change_amount DECIMAL(10,4),
-    change_percent DECIMAL(8,4),
-    
-    -- Volume
-    volume BIGINT,
-    avg_volume_10d BIGINT,
-    volume_ratio DECIMAL(6,2),
-    
-    -- Market cap and shares
-    market_cap BIGINT,
-    shares_outstanding BIGINT,
-    
-    -- Data source metadata
-    data_source VARCHAR(50) DEFAULT 'yfinance',
-    is_market_hours BOOLEAN DEFAULT false
+    UNIQUE(symbol)
 );
 
--- Technical indicators for symbols
-CREATE TABLE technical_indicators (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- Trade executions derived from events
+CREATE TABLE v_trades (
+    trade_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     symbol VARCHAR(10) NOT NULL,
-    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    side VARCHAR(4) NOT NULL,  -- BUY/SELL
+    quantity INTEGER NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
+    total_value DECIMAL(12,2) NOT NULL,
+    commission DECIMAL(8,2) DEFAULT 0,
+    execution_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    strategy VARCHAR(50),  -- swing, day, position
+    source_event_id UUID NOT NULL REFERENCES events(event_id),
     
-    -- Moving averages
-    sma_20 DECIMAL(10,4),
-    sma_50 DECIMAL(10,4),
-    ema_20 DECIMAL(10,4),
-    ema_50 DECIMAL(10,4),
-    
-    -- Momentum indicators
-    rsi DECIMAL(5,2),
-    macd_line DECIMAL(10,6),
-    macd_signal DECIMAL(10,6),
-    macd_histogram DECIMAL(10,6),
-    
-    -- Bollinger Bands
-    bb_upper DECIMAL(10,4),
-    bb_middle DECIMAL(10,4),
-    bb_lower DECIMAL(10,4),
-    bb_width DECIMAL(6,4),
-    
-    -- Support and resistance
-    support_levels DECIMAL(10,4)[],
-    resistance_levels DECIMAL(10,4)[],
-    
-    -- Volume indicators
-    volume_sma_10 BIGINT,
-    volume_ratio DECIMAL(6,2),
-    
-    -- Calculation metadata
-    data_source VARCHAR(50) DEFAULT 'calculated'
+    CHECK(side IN ('BUY', 'SELL'))
 );
 
--- Options data (strike prices, Greeks, implied volatility)
-CREATE TABLE options_data (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    underlying_symbol VARCHAR(10) NOT NULL,
-    contract_symbol VARCHAR(50) NOT NULL,
-    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    
-    -- Contract details
-    option_type VARCHAR(10) NOT NULL, -- CALL or PUT
-    strike_price DECIMAL(10,4) NOT NULL,
-    expiration_date DATE NOT NULL,
-    
-    -- Pricing
-    bid DECIMAL(10,4),
-    ask DECIMAL(10,4),
-    last_price DECIMAL(10,4),
-    mark_price DECIMAL(10,4),
-    
-    -- Volume and interest
-    volume INTEGER DEFAULT 0,
-    open_interest INTEGER DEFAULT 0,
-    
-    -- Greeks
-    delta DECIMAL(8,6),
-    gamma DECIMAL(8,6),
-    theta DECIMAL(8,6),
-    vega DECIMAL(8,6),
-    rho DECIMAL(8,6),
-    
-    -- Volatility
-    implied_volatility DECIMAL(6,4),
-    
-    -- Data source
-    data_source VARCHAR(50) DEFAULT 'moomoo'
+-- Portfolio snapshots at key moments
+CREATE TABLE v_portfolio_snapshots (
+    snapshot_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    snapshot_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    total_value DECIMAL(15,2) NOT NULL,
+    cash_balance DECIMAL(15,2) NOT NULL,
+    invested_value DECIMAL(15,2) NOT NULL,
+    unrealized_pnl DECIMAL(12,2) NOT NULL,
+    realized_pnl DECIMAL(12,2) NOT NULL,
+    num_positions INTEGER NOT NULL,
+    largest_position_pct DECIMAL(5,2),
+    sector_concentration JSONB,  -- {"tech": 0.4, "finance": 0.3, ...}
+    risk_metrics JSONB,  -- {"sharpe": 1.2, "max_drawdown": -0.15, ...}
+    trigger_event_id UUID REFERENCES events(event_id)
 );
 
--- ============================================================================
--- INDEXES FOR PERFORMANCE
--- ============================================================================
-
--- Agent deliberations indexes
-CREATE INDEX idx_deliberations_session_cycle ON agent_deliberations(session_id, cycle_number);
-CREATE INDEX idx_deliberations_agent_type ON agent_deliberations(agent_type);
-CREATE INDEX idx_deliberations_parent ON agent_deliberations(parent_deliberation_id);
-CREATE INDEX idx_deliberations_timestamp ON agent_deliberations(started_at);
-
--- Agent actions indexes  
-CREATE INDEX idx_actions_session ON agent_actions(session_id);
-CREATE INDEX idx_actions_deliberation ON agent_actions(deliberation_id);
-CREATE INDEX idx_actions_status ON agent_actions(status);
-
--- Agent memories indexes
-CREATE INDEX idx_memories_session ON agent_memories(session_id);
-CREATE INDEX idx_memories_type_category ON agent_memories(memory_type, memory_category);
-CREATE INDEX idx_memories_importance ON agent_memories(importance_score);
-CREATE INDEX idx_memories_tags ON agent_memories USING GIN(relevance_tags);
-
--- Market data indexes
-CREATE INDEX idx_market_data_symbol_time ON market_data(symbol, timestamp DESC);
-CREATE INDEX idx_technical_indicators_symbol_time ON technical_indicators(symbol, timestamp DESC);
-CREATE INDEX idx_options_data_underlying_exp ON options_data(underlying_symbol, expiration_date);
-
--- ============================================================================
--- VIEWS FOR EASY QUERYING
--- ============================================================================
-
--- Complete session timeline - chronological view of all activity
-CREATE VIEW session_timeline AS
-SELECT 
-    s.id as session_id,
-    s.session_name,
-    'deliberation' as event_type,
-    d.id as event_id,
-    d.agent_type,
-    d.cycle_number,
-    d.deliberation_step,
-    d.deliberation_type,
-    d.reasoning as event_data,
-    d.confidence_score,
-    d.started_at as event_time
-FROM agent_sessions s
-JOIN agent_deliberations d ON s.id = d.session_id
-
-UNION ALL
-
-SELECT 
-    s.id as session_id,
-    s.session_name,
-    'action' as event_type,
-    a.id as event_id,
-    'executor' as agent_type,
-    NULL as cycle_number,
-    NULL as deliberation_step,
-    a.action_type as deliberation_type,
-    a.action_data::text as event_data,
-    NULL as confidence_score,
-    a.started_at as event_time
-FROM agent_sessions s
-JOIN agent_actions a ON s.id = a.session_id
-
-UNION ALL
-
-SELECT 
-    s.id as session_id,
-    s.session_name,
-    'memory' as event_type,
-    m.id as event_id,
-    NULL as agent_type,
-    NULL as cycle_number,
-    NULL as deliberation_step,
-    m.memory_type as deliberation_type,
-    m.content as event_data,
-    m.importance_score as confidence_score,
-    m.created_at as event_time
-FROM agent_sessions s
-JOIN agent_memories m ON s.id = m.session_id
-
-ORDER BY event_time DESC;
-
--- Session summary - key metrics per session
-CREATE VIEW session_summary AS
-SELECT 
-    s.id,
-    s.session_name,
-    s.status,
-    s.created_at,
-    s.ended_at,
+-- Account funding tracking (deposits/withdrawals)
+CREATE TABLE v_funding (
+    funding_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    transaction_type VARCHAR(20) NOT NULL,  -- DEPOSIT/WITHDRAWAL
+    amount DECIMAL(15,2) NOT NULL,
+    transaction_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    description VARCHAR(255),  -- "Initial funding", "Profit withdrawal", etc.
+    running_balance DECIMAL(15,2) NOT NULL,  -- Cash balance after this transaction
+    source_event_id UUID REFERENCES events(event_id),
     
-    -- Deliberation counts
-    COUNT(DISTINCT d.id) as total_deliberations,
-    COUNT(DISTINCT CASE WHEN d.agent_type = 'planner' THEN d.id END) as planner_deliberations,
-    COUNT(DISTINCT CASE WHEN d.agent_type = 'executor' THEN d.id END) as executor_deliberations, 
-    COUNT(DISTINCT CASE WHEN d.agent_type = 'reflector' THEN d.id END) as reflector_deliberations,
-    
-    -- Action counts
-    COUNT(DISTINCT a.id) as total_actions,
-    COUNT(DISTINCT CASE WHEN a.success = true THEN a.id END) as successful_actions,
-    
-    -- Memory counts  
-    COUNT(DISTINCT m.id) as total_memories,
-    COUNT(DISTINCT CASE WHEN m.memory_type = 'long_term' THEN m.id END) as long_term_memories,
-    
-    -- Cycle info
-    MAX(d.cycle_number) as max_cycle,
-    AVG(d.confidence_score) as avg_confidence
+    CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL')),
+    CHECK(amount != 0)
+);
 
-FROM agent_sessions s
-LEFT JOIN agent_deliberations d ON s.id = d.session_id
-LEFT JOIN agent_actions a ON s.id = a.session_id  
-LEFT JOIN agent_memories m ON s.id = m.session_id
+-- Analysis outcomes tracking
+CREATE TABLE v_analyses (
+    analysis_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    symbol VARCHAR(10) NOT NULL,
+    analysis_type VARCHAR(50) NOT NULL,  -- swing_setup, earnings_play, risk_check
+    recommendation VARCHAR(20),  -- BUY/SELL/HOLD/AVOID
+    confidence_score DECIMAL(3,2),
+    target_price DECIMAL(10,2),
+    stop_loss DECIMAL(10,2),
+    timeframe VARCHAR(20),
+    created_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    outcome VARCHAR(20),  -- pending/hit_target/hit_stop/expired
+    outcome_time TIMESTAMP WITH TIME ZONE,
+    actual_return DECIMAL(8,4),  -- If traded
+    source_event_id UUID NOT NULL REFERENCES events(event_id)
+);
 
-GROUP BY s.id, s.session_name, s.status, s.created_at, s.ended_at;
+-- Indexes for ribs
+CREATE INDEX idx_positions_symbol ON v_positions(symbol);
+CREATE INDEX idx_trades_symbol_time ON v_trades(symbol, execution_time DESC);
+CREATE INDEX idx_trades_source_event ON v_trades(source_event_id);
+CREATE INDEX idx_funding_time ON v_funding(transaction_time DESC);
+CREATE INDEX idx_funding_type ON v_funding(transaction_type, transaction_time DESC);
+CREATE INDEX idx_snapshots_time ON v_portfolio_snapshots(snapshot_time DESC);
+CREATE INDEX idx_analyses_symbol ON v_analyses(symbol, created_time DESC);
+CREATE INDEX idx_analyses_source_event ON v_analyses(source_event_id);
 
--- Current session summary (for active session)
-CREATE VIEW current_session_summary AS
-SELECT * FROM session_summary 
-WHERE status = 'active' 
-ORDER BY created_at DESC 
-LIMIT 1;
+-- ============================================================================
+-- EVENT VIEWS FOR EASY QUERYING
+-- ============================================================================
+
+-- Recent events view
+CREATE VIEW recent_events AS
+SELECT 
+    event_id,
+    event_key,
+    event_type,
+    category,
+    symbols,
+    confidence_score,
+    ts_event,
+    EXTRACT(EPOCH FROM (NOW() - ts_event))/3600 as age_hours,
+    payload->'summary' as summary,
+    payload->'agent_reasoning' as reasoning
+FROM events
+ORDER BY ts_event DESC
+LIMIT 100;
+
+-- Event summary by type
+CREATE VIEW event_summary AS
+SELECT 
+    event_type,
+    category,
+    COUNT(*) as event_count,
+    AVG(confidence_score) as avg_confidence,
+    MAX(ts_event) as last_event,
+    ARRAY(SELECT DISTINCT unnest(ARRAY_AGG(symbols))) as all_symbols
+FROM events
+GROUP BY event_type, category
+ORDER BY event_count DESC;
+
+-- Session activity view
+CREATE VIEW session_activity AS
+SELECT 
+    session_id,
+    COUNT(*) as total_events,
+    COUNT(DISTINCT event_type) as event_types,
+    ARRAY(SELECT DISTINCT unnest(ARRAY_AGG(symbols))) as session_symbols,
+    MIN(ts_event) as session_start,
+    MAX(ts_event) as last_activity,
+    AVG(confidence_score) as avg_confidence
+FROM events
+GROUP BY session_id
+ORDER BY last_activity DESC;
+
+-- ============================================================================
+-- PORTFOLIO STRATEGIST VIEWS (3 CONSOLIDATED VIEWS)
+-- ============================================================================
+
+-- 1. PORTFOLIO: Complete portfolio overview combining positions, cash, and P&L
+CREATE VIEW portfolio_overview AS
+WITH position_summary AS (
+    SELECT 
+        COUNT(*) as total_positions,
+        SUM(current_value) as total_invested,
+        SUM(unrealized_pnl) as total_unrealized_pnl,
+        AVG(CASE WHEN current_value > 0 THEN (current_value - (shares * avg_cost)) / (shares * avg_cost) END) as avg_return_pct,
+        MAX(current_value) as largest_position_value,
+        (MAX(current_value) / NULLIF(SUM(current_value), 0)) * 100 as largest_position_pct
+    FROM v_positions WHERE shares != 0
+),
+funding_summary AS (
+    SELECT 
+        SUM(CASE WHEN transaction_type = 'DEPOSIT' THEN amount ELSE 0 END) as total_deposits,
+        SUM(CASE WHEN transaction_type = 'WITHDRAWAL' THEN amount ELSE 0 END) as total_withdrawals,
+        (SELECT running_balance FROM v_funding ORDER BY transaction_time DESC LIMIT 1) as current_cash_balance
+    FROM v_funding
+),
+concentration_risks AS (
+    SELECT 
+        COUNT(*) as concentration_alerts
+    FROM v_positions 
+    WHERE shares != 0 AND (current_value / (SELECT SUM(current_value) FROM v_positions WHERE shares != 0)) > 0.15
+)
+SELECT 
+    p.total_positions,
+    p.total_invested,
+    f.current_cash_balance,
+    p.total_unrealized_pnl,
+    f.total_deposits,
+    f.total_withdrawals,
+    p.avg_return_pct,
+    p.largest_position_pct,
+    c.concentration_alerts,
+    (SELECT COUNT(*) FROM v_portfolio_snapshots) as historical_snapshots
+FROM position_summary p, funding_summary f, concentration_risks c;
+
+-- 2. RECENT_PERFORMANCE: Trading activity and position performance  
+CREATE VIEW recent_performance AS
+WITH trade_summary AS (
+    SELECT 
+        symbol,
+        COUNT(*) as trade_count,
+        SUM(CASE WHEN side = 'BUY' THEN quantity ELSE -quantity END) as net_shares,
+        AVG(price) as avg_price,
+        MAX(execution_time) as last_trade,
+        STRING_AGG(DISTINCT strategy, ', ') as strategies_used,
+        SUM(total_value) as total_volume
+    FROM v_trades 
+    WHERE execution_time >= NOW() - INTERVAL '30 days'
+    GROUP BY symbol
+),
+position_performance AS (
+    SELECT 
+        symbol,
+        shares,
+        avg_cost,
+        current_value,
+        unrealized_pnl,
+        realized_pnl,
+        (current_value / NULLIF((SELECT SUM(current_value) FROM v_positions WHERE shares != 0), 0)) * 100 as portfolio_weight_pct
+    FROM v_positions 
+    WHERE shares != 0
+)
+SELECT 
+    COALESCE(t.symbol, p.symbol) as symbol,
+    t.trade_count,
+    t.net_shares,
+    t.avg_price,
+    t.last_trade,
+    t.strategies_used,
+    t.total_volume,
+    p.shares as current_shares,
+    p.avg_cost,
+    p.current_value,
+    p.unrealized_pnl,
+    p.portfolio_weight_pct
+FROM trade_summary t
+FULL OUTER JOIN position_performance p ON t.symbol = p.symbol
+ORDER BY t.last_trade DESC NULLS LAST, p.symbol;
+
+-- 3. ANALYSIS_PERFORMANCE: Analysis outcomes and success tracking
+CREATE VIEW analysis_performance AS
+WITH analysis_summary AS (
+    SELECT 
+        analysis_type,
+        recommendation,
+        symbol,
+        COUNT(*) as total_analyses,
+        COUNT(CASE WHEN outcome = 'hit_target' THEN 1 END) as successes,
+        COUNT(CASE WHEN outcome = 'hit_stop' THEN 1 END) as failures,
+        COUNT(CASE WHEN outcome = 'pending' THEN 1 END) as pending,
+        AVG(CASE WHEN outcome IN ('hit_target', 'hit_stop') THEN actual_return END) as avg_return,
+        MAX(created_time) as last_analysis
+    FROM v_analyses 
+    WHERE created_time >= NOW() - INTERVAL '90 days'
+    GROUP BY analysis_type, recommendation, symbol
+),
+overall_stats AS (
+    SELECT 
+        COUNT(*) as total_analyses_all,
+        COUNT(CASE WHEN outcome = 'hit_target' THEN 1 END) as total_successes,
+        COUNT(CASE WHEN outcome = 'hit_stop' THEN 1 END) as total_failures,
+        ROUND(
+            COUNT(CASE WHEN outcome = 'hit_target' THEN 1 END) * 100.0 / 
+            NULLIF(COUNT(CASE WHEN outcome IN ('hit_target', 'hit_stop') THEN 1 END), 0), 
+            2
+        ) as overall_success_rate_pct
+    FROM v_analyses 
+    WHERE created_time >= NOW() - INTERVAL '90 days'
+)
+SELECT 
+    a.analysis_type,
+    a.recommendation,
+    a.symbol,
+    a.total_analyses,
+    a.successes,
+    a.failures,
+    a.pending,
+    ROUND(
+        a.successes * 100.0 / NULLIF((a.successes + a.failures), 0), 2
+    ) as success_rate_pct,
+    a.avg_return,
+    a.last_analysis,
+    o.overall_success_rate_pct,
+    o.total_analyses_all
+FROM analysis_summary a
+CROSS JOIN overall_stats o
+ORDER BY a.total_analyses DESC, a.last_analysis DESC;

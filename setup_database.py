@@ -128,7 +128,7 @@ def run_schema_file(db_config: dict, schema_file: Path) -> bool:
         return False
 
 def test_connection(db_config: dict) -> bool:
-    """Test the database connection and show some basic info."""
+    """Test the database connection and show MVP3 schema info."""
     try:
         conn = psycopg2.connect(**db_config)
         cursor = conn.cursor()
@@ -137,22 +137,35 @@ def test_connection(db_config: dict) -> bool:
         cursor.execute("SELECT version()")
         version = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM agent_sessions")
-        sessions_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM events")
+        events_count = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM agent_deliberations")  
-        deliberations_count = cursor.fetchone()[0]
+        # Check if views exist
+        cursor.execute("""
+            SELECT COUNT(*) FROM information_schema.views 
+            WHERE table_name IN ('recent_events', 'event_summary', 'session_activity')
+        """)
+        views_count = cursor.fetchone()[0]
+        
+        # Check indexes
+        cursor.execute("""
+            SELECT COUNT(*) FROM pg_indexes 
+            WHERE tablename = 'events'
+        """)
+        indexes_count = cursor.fetchone()[0]
         
         cursor.close()
         conn.close()
         
         console.print(Panel(
-            f"**Database Connection Test**\n\n"
+            f"**MVP3 Database Connection Test**\n\n"
             f"**PostgreSQL Version:** {version.split(',')[0]}\n"
-            f"**Sessions:** {sessions_count}\n"
-            f"**Deliberations:** {deliberations_count}\n\n"
-            f"**Connection successful!**",
-            title="Database Status",
+            f"**Events Table:** ✅ Created\n"
+            f"**Events Count:** {events_count}\n"
+            f"**Views Created:** {views_count}/3\n"
+            f"**Indexes Created:** {indexes_count}\n\n"
+            f"**🎯 MVP3 Ready for Event Storage!**",
+            title="MVP3 Database Status",
             style="green"
         ))
         
@@ -165,12 +178,12 @@ def test_connection(db_config: dict) -> bool:
 def main():
     """Main setup function."""
     console.print(Panel(
-        "SWING SAGE - Claude Code Trading Platform\n\n"
+        "🎯 SWING SAGE MVP3 - UNIFIED EVENT SYSTEM\n\n"
         "This script will:\n"
         "1. Create the database if it doesn't exist\n" 
-        "2. Apply the schema (tables, indexes, views)\n"
-        "3. Test the connection\n",
-        title="Database Setup",
+        "2. Apply the MVP3 schema (unified events table)\n"
+        "3. Test the connection and verify setup\n",
+        title="MVP3 Database Setup",
         style="blue"
     ))
     
@@ -215,9 +228,12 @@ def main():
         sys.exit(1)
     
     console.print(Panel(
-        "**Database setup completed successfully!**\n\n"
-        "Claude Code is now ready to serve as your trading platform.\n"
-        "Start chatting: 'What's the market setup today?'",
+        "🎉 **MVP3 Database Setup Completed!**\n\n"
+        "✅ Unified events table created\n"
+        "✅ Performance indexes added\n"
+        "✅ Event views configured\n"
+        "✅ Ready for user-triggered memory system\n\n"
+        "🚀 Start using: 'Analyze NVDA' → 'push this'",
         title="Setup Complete",
         style="green"
     ))
