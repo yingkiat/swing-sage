@@ -6,7 +6,8 @@
       "WebSearch",
       "Bash(claude mcp:*)",
       "mcp__trading-server__get_market_data",
-      "WebFetch(domain:finance.yahoo.com)"
+      "WebFetch(domain:finance.yahoo.com)",
+      "mcp__trading-server__get_events"
     ],
     "deny": [],
     "ask": []

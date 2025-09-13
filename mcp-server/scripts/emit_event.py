@@ -129,6 +129,110 @@ def extract_parameters(agent_reasoning: str, conversation_context: str) -> Dict[
     
     return params
 
+def extract_structured_analysis(agent_reasoning: str, context: str) -> Dict[str, Any]:
+    """Extract structured data from agent reasoning for database triggers."""
+    structured = {}
+    combined_text = f"{agent_reasoning} {context}".lower()
+    
+    # Extract recommendations/actions
+    if 'trade orchestrator' in combined_text or 'final verdict' in combined_text:
+        # Trade orchestrator output - extract final recommendation
+        recommendation_patterns = [
+            r'trade orchestrator final verdict:([^.]+)',
+            r'final verdict:([^.]+)', 
+            r'action:\s*(buy|sell|hold|avoid)',
+            r'recommendation:\s*([^.]+)'
+        ]
+        for pattern in recommendation_patterns:
+            match = re.search(pattern, combined_text, re.IGNORECASE)
+            if match:
+                structured['recommendation'] = match.group(1).strip()
+                break
+        
+        # Extract action
+        action_patterns = [
+            r'\*\*action\*\*:\s*(buy|sell|hold|avoid)',
+            r'action:\s*(buy|sell|hold|avoid)'
+        ]
+        for pattern in action_patterns:
+            match = re.search(pattern, combined_text, re.IGNORECASE)
+            if match:
+                structured['action'] = match.group(1).upper()
+                break
+    
+    # Extract price levels
+    price_levels = {}
+    price_patterns = {
+        'entry_price': r'entry[^$]*\$(\d+(?:\.\d{2})?)',
+        'stop_loss': r'stop[^$]*\$(\d+(?:\.\d{2})?)',
+        'target_price': r'target[^$]*\$(\d+(?:\.\d{2})?)',
+        'support_level': r'support[^$]*\$(\d+(?:\.\d{2})?)',
+        'resistance_level': r'resistance[^$]*\$(\d+(?:\.\d{2})?)'
+    }
+    
+    for key, pattern in price_patterns.items():
+        match = re.search(pattern, combined_text, re.IGNORECASE)
+        if match:
+            price_levels[key] = float(match.group(1))
+    
+    if price_levels:
+        structured['price_levels'] = price_levels
+    
+    # Extract confidence score
+    confidence_patterns = [
+        r'confidence:\s*(\d+)/10',
+        r'confidence:\s*(\d+(?:\.\d+)?)',
+        r'setup quality.*?(\d+)/10'
+    ]
+    for pattern in confidence_patterns:
+        match = re.search(pattern, combined_text, re.IGNORECASE)
+        if match:
+            score = float(match.group(1))
+            structured['confidence'] = score / 10.0 if score > 1 else score
+            break
+    
+    # Extract trade parameters for portfolio actions
+    trade_params = {}
+    
+    # Options trades
+    options_patterns = {
+        'contracts': r'(\d+)\s*(?:x\s*)?contracts?',
+        'strike_price': r'strike[^$]*\$(\d+(?:\.\d{2})?)',
+        'expiration': r'expiration[^:]*(\d{1,2}/\d{1,2}/\d{4})',
+        'option_type': r'(calls?|puts?)'
+    }
+    
+    for key, pattern in options_patterns.items():
+        match = re.search(pattern, combined_text, re.IGNORECASE)
+        if match:
+            if key == 'contracts':
+                trade_params[key] = int(match.group(1))
+            elif key == 'strike_price':
+                trade_params[key] = float(match.group(1))
+            elif key == 'option_type':
+                trade_params[key] = 'calls' if 'call' in match.group(1).lower() else 'puts'
+            else:
+                trade_params[key] = match.group(1)
+    
+    # Stock trades
+    stock_patterns = {
+        'shares': r'(\d+)\s*shares?',
+        'position_size': r'position size[^$]*\$(\d+(?:,\d{3})*(?:\.\d{2})?)'
+    }
+    
+    for key, pattern in stock_patterns.items():
+        match = re.search(pattern, combined_text, re.IGNORECASE)
+        if match:
+            if key == 'shares':
+                trade_params[key] = int(match.group(1))
+            elif key == 'position_size':
+                trade_params[key] = float(match.group(1).replace(',', ''))
+    
+    if trade_params:
+        structured['trade_parameters'] = trade_params
+    
+    return structured
+
 def classify_event(user_command: str, conversation_context: str) -> Tuple[str, str]:
     """Classify event type and category from user command and context."""
     user_cmd_lower = user_command.lower()
@@ -423,6 +527,9 @@ def emit_event(
         # Extract additional parameters from reasoning
         extracted_params = extract_parameters(agent_reasoning, user_command)
         
+        # Extract structured analysis from agent reasoning 
+        structured_analysis = extract_structured_analysis(agent_reasoning, user_command)
+        
         # Merge provided parameters with extracted ones
         all_params = {**parameters_used, **extracted_params}
         
@@ -448,14 +555,15 @@ def emit_event(
         # Get sequence number
         sequence_num = get_next_sequence_number(db_config, session_id)
         
-        # Create event payload
+        # Create event payload with structured analysis
         payload = {
             'user_command': user_command,
             'agent_reasoning': agent_reasoning,
             'parameters': all_params,
             'confidence_indicators': confidence_indicators,
             'extracted_symbols': symbols,
-            'classification_confidence': confidence_score
+            'classification_confidence': confidence_score,
+            'structured_analysis': structured_analysis  # NEW: Pre-parsed structured data
         }
         
         # Generate event ID

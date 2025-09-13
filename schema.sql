@@ -97,7 +97,7 @@ CREATE INDEX idx_events_cross_refs ON events USING GIN(cross_references);
 CREATE TABLE v_positions (
     position_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     symbol VARCHAR(10) NOT NULL,
-    shares INTEGER NOT NULL DEFAULT 0,
+    quantity INTEGER NOT NULL DEFAULT 0,  -- Renamed from shares to handle both stocks/options
     avg_cost DECIMAL(10,2),
     current_value DECIMAL(12,2),
     unrealized_pnl DECIMAL(12,2),
@@ -105,9 +105,15 @@ CREATE TABLE v_positions (
     sector VARCHAR(50),
     first_entry TIMESTAMP WITH TIME ZONE,
     last_activity TIMESTAMP WITH TIME ZONE,
+    instrument_type VARCHAR(10) NOT NULL DEFAULT 'stock',  -- stock/option
+    strike_price DECIMAL(10,2),  -- For options
+    expiration_date DATE,  -- For options
+    option_type VARCHAR(10),  -- calls/puts
     source_events UUID[],  -- Spine event IDs that created this position
     
-    UNIQUE(symbol)
+    CHECK(instrument_type IN ('stock', 'option')),
+    CHECK(option_type IN ('calls', 'puts') OR option_type IS NULL),
+    UNIQUE(symbol, instrument_type, strike_price, expiration_date, option_type)  -- Allow multiple options per symbol
 );
 
 -- Trade executions derived from events
@@ -121,9 +127,15 @@ CREATE TABLE v_trades (
     commission DECIMAL(8,2) DEFAULT 0,
     execution_time TIMESTAMP WITH TIME ZONE NOT NULL,
     strategy VARCHAR(50),  -- swing, day, position
+    instrument_type VARCHAR(10) NOT NULL DEFAULT 'stock',  -- stock/option
+    strike_price DECIMAL(10,2),  -- For options
+    expiration_date DATE,  -- For options
+    option_type VARCHAR(10),  -- calls/puts
     source_event_id UUID NOT NULL REFERENCES events(event_id),
     
-    CHECK(side IN ('BUY', 'SELL'))
+    CHECK(side IN ('BUY', 'SELL')),
+    CHECK(instrument_type IN ('stock', 'option')),
+    CHECK(option_type IN ('calls', 'puts') OR option_type IS NULL)
 );
 
 -- Portfolio snapshots at key moments
@@ -161,13 +173,13 @@ CREATE TABLE v_analyses (
     analysis_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     symbol VARCHAR(10) NOT NULL,
     analysis_type VARCHAR(50) NOT NULL,  -- swing_setup, earnings_play, risk_check
-    recommendation VARCHAR(20),  -- BUY/SELL/HOLD/AVOID
+    recommendation TEXT,  -- Full recommendation details
     confidence_score DECIMAL(3,2),
     target_price DECIMAL(10,2),
     stop_loss DECIMAL(10,2),
     timeframe VARCHAR(20),
     created_time TIMESTAMP WITH TIME ZONE NOT NULL,
-    outcome VARCHAR(20),  -- pending/hit_target/hit_stop/expired
+    outcome TEXT,  -- Analysis outcome details
     outcome_time TIMESTAMP WITH TIME ZONE,
     actual_return DECIMAL(8,4),  -- If traded
     source_event_id UUID NOT NULL REFERENCES events(event_id)
@@ -242,10 +254,10 @@ WITH position_summary AS (
         COUNT(*) as total_positions,
         SUM(current_value) as total_invested,
         SUM(unrealized_pnl) as total_unrealized_pnl,
-        AVG(CASE WHEN current_value > 0 THEN (current_value - (shares * avg_cost)) / (shares * avg_cost) END) as avg_return_pct,
+        AVG(CASE WHEN current_value > 0 THEN (current_value - (quantity * avg_cost)) / (quantity * avg_cost) END) as avg_return_pct,
         MAX(current_value) as largest_position_value,
         (MAX(current_value) / NULLIF(SUM(current_value), 0)) * 100 as largest_position_pct
-    FROM v_positions WHERE shares != 0
+    FROM v_positions WHERE quantity != 0
 ),
 funding_summary AS (
     SELECT 
@@ -258,7 +270,7 @@ concentration_risks AS (
     SELECT 
         COUNT(*) as concentration_alerts
     FROM v_positions 
-    WHERE shares != 0 AND (current_value / (SELECT SUM(current_value) FROM v_positions WHERE shares != 0)) > 0.15
+    WHERE quantity != 0 AND (current_value / (SELECT SUM(current_value) FROM v_positions WHERE quantity != 0)) > 0.15
 )
 SELECT 
     p.total_positions,
@@ -279,7 +291,7 @@ WITH trade_summary AS (
     SELECT 
         symbol,
         COUNT(*) as trade_count,
-        SUM(CASE WHEN side = 'BUY' THEN quantity ELSE -quantity END) as net_shares,
+        SUM(CASE WHEN side = 'BUY' THEN quantity ELSE -quantity END) as net_quantity,
         AVG(price) as avg_price,
         MAX(execution_time) as last_trade,
         STRING_AGG(DISTINCT strategy, ', ') as strategies_used,
@@ -291,24 +303,24 @@ WITH trade_summary AS (
 position_performance AS (
     SELECT 
         symbol,
-        shares,
+        quantity,
         avg_cost,
         current_value,
         unrealized_pnl,
         realized_pnl,
-        (current_value / NULLIF((SELECT SUM(current_value) FROM v_positions WHERE shares != 0), 0)) * 100 as portfolio_weight_pct
+        (current_value / NULLIF((SELECT SUM(current_value) FROM v_positions WHERE quantity != 0), 0)) * 100 as portfolio_weight_pct
     FROM v_positions 
-    WHERE shares != 0
+    WHERE quantity != 0
 )
 SELECT 
     COALESCE(t.symbol, p.symbol) as symbol,
     t.trade_count,
-    t.net_shares,
+    t.net_quantity,
     t.avg_price,
     t.last_trade,
     t.strategies_used,
     t.total_volume,
-    p.shares as current_shares,
+    p.quantity as current_quantity,
     p.avg_cost,
     p.current_value,
     p.unrealized_pnl,

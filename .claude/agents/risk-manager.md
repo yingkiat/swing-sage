@@ -58,9 +58,9 @@ When analyzing risk for a trade, always provide:
    - Alternative exit strategies
 
 ## Performance Guidelines
-- **LIMIT WEB SEARCHES**: Maximum of 2 web searches per analysis to maintain speed
-- Focus on quantitative risk calculations over external research
-- Use internal data and provided market information as primary sources
+- **WEB SEARCHES RARELY NEEDED**: Focus on quantitative risk calculations using provided data
+- **Search sparingly**: Use 1-2 searches only for major risk events or regulatory changes if needed
+- **Primary sources**: MCP market data, portfolio data, and user's risk parameters
 
 ## Position Sizing Methods
 

@@ -68,9 +68,9 @@ Always structure your final recommendation as:
 4. **Clarity Over Complexity**: Prefer simple, executable plans over complex strategies
 
 ## Performance Guidelines
-- **LIMIT WEB SEARCHES**: Maximum of 2 web searches per analysis to maintain speed
-- Rely primarily on specialist agent inputs and MCP market data
-- Use web searches only for critical missing context or confirmations
+- **WEB SEARCHES OPTIONAL**: Use 1-2 searches only for critical missing context or final confirmations
+- **Primary sources**: Specialist agent inputs (price-analyst, risk-manager) and MCP market data
+- **Search focus**: Final verification of major catalysts or market-moving events if needed
 
 ## Key Principles
 - **No recommendation without stop-loss**: Every position must have defined risk

@@ -32,18 +32,23 @@ For ANY trading-related question, you MUST follow this sequence:
 ### Rule 2: Portfolio-Aware Trading Workflow  
 For comprehensive trading analysis, follow this sequence:
 
+**SEQUENTIAL STEPS (Required Order):**
 ```
 0. 💼 portfolio-strategist (SESSION START) → Portfolio health + strategic context
 1. 📊 get_market_data (MCP tool) → Real price, volume, technical indicators  
 2. 🧠 get_events (MCP tool) → Check for recent relevant memories about this symbol
-3. 📈 price-analyst (PROPOSER) → Technical + sentiment analysis with portfolio context
-4. 🛡️ risk-manager (COUNTERER) → Risk factors, position sizing with portfolio constraints
-5. 🎯 trade-orchestrator (VERDICT) → Final decision within portfolio risk limits
+```
+
+**PARALLEL EXECUTION (Performance Optimization):**
+```
+3. 📈 price-analyst (PROPOSER) + 🛡️ risk-manager (COUNTERER) → Run in parallel with portfolio context
+   ↓
+4. 🎯 trade-orchestrator (VERDICT) → Final decision synthesizing both parallel results
 ```
 
 **Session startup**: Always portfolio-strategist first (unless immediate price check requested)
 **For simple queries**: Use price-analyst only for speed  
-**For complex analysis**: Use full 4-agent workflow ending with trade-orchestrator
+**For complex analysis**: Use parallel workflow (price-analyst + risk-manager → trade-orchestrator)
 
 ### Rule 4: Proper Agent Spawning with Task Tool
 **CRITICAL**: Use Claude Code's Task tool to spawn agents, NOT bash commands:
@@ -80,7 +85,7 @@ ALWAYS apply user preferences when provided:
 - **MUST** reference MCP market data prices in analysis
 - **NEVER** make up price levels - use actual IBKR data
 - **COMBINE** technical analysis with sentiment/news analysis
-- **WEB SEARCHES REQUIRED**: Use up to 3 web searches for recent news, analyst actions, social sentiment
+- **WEB SEARCHES ENCOURAGED**: Start with 1 search for recent developments, use judgment for additional searches
 - Make the strongest case for the directional trade (long OR short)
 - Focus on specific entry/exit levels from real data
 - Search targets: Recent news (7 days), analyst reports, social media, earnings/catalysts
@@ -102,15 +107,28 @@ market_data = get_market_data(symbols=["TICKER"])
 # Step 2: Check for recent memories about this symbol
 recent_memories = get_events(filters={"symbols": ["TICKER"], "hours_back": 168})
 
-# Step 3: Spawn price analyst with both MCP data and memory context
+# Step 3: PARALLEL EXECUTION - Spawn price-analyst and risk-manager simultaneously  
 memory_context = "No recent analysis found." if not recent_memories else f"Previous analysis: {recent_memories}"
-Task(
-    subagent_type="price-analyst",
+
+# Launch both agents in parallel with same market data and portfolio context
+price_analysis_task = Task(
+    subagent_type="price-analyst", 
     description="Technical analysis for TICKER",
-    prompt=f"Analyze TICKER using this REAL IBKR data: {market_data_summary}. CONTEXT: {memory_context}. Focus on entry/exit levels."
+    prompt=f"Analyze TICKER using this REAL IBKR data: {market_data_summary}. CONTEXT: {memory_context}. Portfolio context: {portfolio_context}. Focus on entry/exit levels."
 )
 
-# Steps 4-6: Continue with other agents...
+risk_analysis_task = Task(
+    subagent_type="risk-manager",
+    description="Risk analysis for TICKER", 
+    prompt=f"Assess risk for TICKER trade using this REAL IBKR data: {market_data_summary}. Portfolio context: {portfolio_context}. Calculate position sizing and risk metrics."
+)
+
+# Step 4: Trade orchestrator synthesizes both parallel results
+final_recommendation = Task(
+    subagent_type="trade-orchestrator",
+    description="Final trade decision for TICKER",
+    prompt=f"Synthesize final trade recommendation using:\nPrice Analysis: {price_analysis_result}\nRisk Analysis: {risk_analysis_result}\nMake unified BUY/SELL/HOLD decision with specific execution details."
+)
 ```
 
 ### Risk Manager (The Counterer)
@@ -244,6 +262,12 @@ User: "push this analysis"
 
 **SMART ROUTING**: emit_event automatically detects portfolio materiality and updates both spine + ribs when actual transactions are reported.
 
+**CASH POSITION UPDATES**: 
+• Purchases: Decrement cash by (quantity × price + fees)
+• Sales: Increment cash by (quantity × price - fees)  
+• emit_event should detect and update v_cash_positions automatically
+• Options: Premium paid reduces cash, premium received increases cash
+
 **WAIT for explicit user statements. DO NOT assume, setup, or initialize anything.**
 
 ### Memory Storage Commands (Topic-Based)
@@ -285,6 +309,28 @@ User: [after analysis] "push this"
 → Confirm: "✅ Stored observation/price_check for topic 'SBET' (Event ID: abc123)"
 ```
 
+**EVENT TYPE DECISION RULES** (CRITICAL):
+```
+USER VERB PATTERNS → type_hint:
+• "I bought/sold/traded/executed X" → "observation" (past tense = completed action)
+• "I'm thinking about buying X" → "observation" (user consideration)
+• "Should I buy X?" → "analysis" (if agent responds with analysis)
+• "push this analysis" → "analysis" (storing agent analysis)
+• "save this insight" → "insight" (storing market observation)
+
+AGENT ACTION PATTERNS → type_hint:
+• Agent provides trade recommendation → "proposal" 
+• Agent provides technical analysis → "analysis"
+• Agent shares market insight → "insight"
+• Recording user's completed trades → "observation"
+```
+
+**DEFINED EVENT TYPES:**
+- **analysis** - Trading analysis/recommendations
+- **proposal** - Trade ideas/suggestions  
+- **insight** - Market observations/learnings
+- **observation** - General notes/tracking
+
 **Context Structure for emit_event:**
 - recent_symbols: ["SBET"] → becomes topic "SBET"
 - agent_reasoning: "Current price check analysis text to store" 
@@ -296,6 +342,38 @@ User: [after analysis] "push this"
 - Filter by type: {filters: {event_types: ["observation"]}}  
 - Recent events: {filters: {hours_back: 24}}
 - Multi-topic: {filters: {topic: "AAPL_NVDA"}} (for multi-symbol analysis)
+
+## SPINE AND RIBS ARCHITECTURE
+
+**IMPORTANT**: Swing Sage uses a "Spine and Ribs" data architecture for event storage and domain projections.
+
+### Architecture Overview
+- **SPINE**: `events` table - immutable event storage with full context (the "why")
+- **RIBS**: `v_*` tables - domain-specific projections for efficient queries (the "what")
+- **DATA FLOW**: User actions → MCP emit_event → spine → database triggers → ribs
+
+### Current Implementation Status
+✅ **Functional**: Spine→ribs system working with database triggers  
+🚧 **In Progress**: Triggers are complex but functional for basic trading events  
+❌ **Known Issue**: Intelligence in wrong layer (triggers vs MCP layer)
+
+### Key Files
+- `schema.sql` - Complete database schema (spine + ribs)
+- `triggers.sql` - Database triggers for spine → ribs processing
+- `docs/architecture/data-architecture.md` - Comprehensive architecture documentation
+- `tests/trigger_tests.sql` - Test cases for trigger functionality
+
+### When Trades Are Executed
+When users report actual trades (e.g., "I bought 4 GME calls at $0.97"):
+1. Use `emit_event` MCP tool with `type_hint: "observation"`
+2. Database triggers automatically update:
+   - `v_trades` - Trade execution record
+   - `v_positions` - Position holding updates  
+   - `v_funding` - Cash balance adjustments
+
+### Architecture Decision
+**Intelligence should be at MCP layer, not database triggers.**
+Future refactoring should move pattern matching and data extraction to the application layer for maintainability.
 
 ### Agent Files Location
 - `.claude/agents/portfolio-strategist.md`

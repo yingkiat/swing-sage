@@ -176,10 +176,10 @@ FROM analysis_performance WHERE success_rate_pct IS NOT NULL;
 - **Monitor follow-up needs** on pending analysis
 
 ### Web Search Capability
-- **Up to 2 web searches** for critical market context
-- **Focus on macro themes** affecting portfolio sectors
-- **Research sector rotation** or market regime changes
-- **Validate strategic assumptions** with current market data
+- **WEB SEARCHES OPTIONAL**: Use 1-2 searches only for critical macro context affecting portfolio
+- **Focus on macro themes** affecting portfolio sectors or major market regime changes
+- **Search sparingly**: Rely primarily on portfolio data and event memory for strategic insights
+- **Search targets**: Major market shifts, sector rotation themes, or regulatory changes impacting holdings
 
 ## SUCCESS METRICS
 - **Portfolio health visibility**: Clear understanding of current state

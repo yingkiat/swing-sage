@@ -4,8 +4,8 @@
   "description": "Swing Sage Trading MCP Server for Claude Code integration",
   "main": "mcp-server/trading-mcp-stdio.js",
   "scripts": {
-    "start": "node mcp-server/trading-mcp-stdio.js",
-    "start:old": "node mcp-server/trading-mcp-stdio-old.js",
+    "start": "node --max-old-space-size=16384 mcp-server/trading-mcp-stdio.js",
+    "start:old": "node --max-old-space-size=16384 mcp-server/trading-mcp-stdio-old.js",
     "test-mcp": "echo 'Test MCP server with: claude' && echo 'Then ask: What tools do you have available?'"
   },
   "keywords": [

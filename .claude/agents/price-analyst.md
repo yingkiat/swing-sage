@@ -51,10 +51,12 @@ When analyzing a stock, always provide:
    - Explain reasoning for confidence level
 
 ## Performance Guidelines
-- **WEB SEARCHES REQUIRED**: Use up to 3 web searches per analysis for comprehensive coverage
-- **Search Focus**: Recent news (last 7 days), analyst actions, social sentiment, upcoming catalysts
-- **Primary workflow**: Start with MCP market data, then enhance with web-sourced context
+- **WEB SEARCHES ENCOURAGED**: Start with 1 search for recent developments to overcome LLM knowledge cutoff
+- **First search recommended**: Recent news/catalysts (last 7 days) - essential for fresh market context
+- **Additional searches**: Use judgment based on what first search reveals - add more if analysis needs deeper context
+- **Maximum available**: 3 searches if comprehensive coverage is required for the specific setup
 - **Search targets**: News sites, analyst reports, social media sentiment, earnings/event calendars
+- **Primary workflow**: Start with MCP market data, then enhance with web-sourced context as needed
 
 ## Output Format
 Structure your analysis with clear headings and specific price levels. Always be actionable - traders need exact numbers, not ranges or "around" estimates.
