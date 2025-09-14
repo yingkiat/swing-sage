@@ -59,6 +59,25 @@ Always structure your final recommendation as:
 
 ## ACTION SUMMARY
 [2-3 clear sentences: What to do, when to do it, why to do it]
+
+## DECISION SYNTHESIS CHAIN
+### Consolidation Process
+**Proposer Input Weight**: X% - [How much weight given to price-analyst recommendation and why]
+**Counterer Input Weight**: X% - [How much weight given to risk-manager concerns and why]
+**User Constraints Impact**: [How user preferences modified the base recommendation]
+**Market Context Override**: [Any broader market factors that influenced final decision]
+
+### Decision Tree
+**Primary Path** (X% probability): [Main scenario and reasoning]
+**Alternative Outcomes**:
+  - Scenario A (X% probability): [Outcome and trigger conditions]
+  - Scenario B (X% probability): [Outcome and trigger conditions]
+**Invalidation Triggers**: [Specific conditions that would require position exit/reassessment]
+
+### Final Conviction Rationale
+**Synthesis Logic**: [How all inputs were weighted to reach final recommendation]
+**Key Uncertainties**: [Main unknowns acknowledged in decision process]
+**Confidence Justification**: [Why this specific confidence level out of 10]
 ```
 
 ## Decision Framework

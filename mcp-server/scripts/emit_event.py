@@ -129,11 +129,147 @@ def extract_parameters(agent_reasoning: str, conversation_context: str) -> Dict[
     
     return params
 
+def extract_reasoning_chain(agent_reasoning: str) -> Dict[str, Any]:
+    """Extract structured reasoning chain from agent analysis."""
+    reasoning_chain = {
+        'steps': [],
+        'overall_confidence': None,
+        'decision_framework': None
+    }
+
+    # Look for reasoning chain analysis sections
+    chain_patterns = [
+        r'## REASONING CHAIN ANALYSIS(.*?)(?=##|$)',
+        r'## RISK ASSESSMENT CHAIN(.*?)(?=##|$)'
+    ]
+
+    for pattern in chain_patterns:
+        match = re.search(pattern, agent_reasoning, re.DOTALL | re.IGNORECASE)
+        if match:
+            chain_content = match.group(1)
+
+            # Extract individual steps
+            step_pattern = r'### Step (\d+):\s*([^\n]+)(.*?)(?=### Step|\Z)'
+            step_matches = re.finditer(step_pattern, chain_content, re.DOTALL | re.IGNORECASE)
+
+            for step_match in step_matches:
+                step_num = int(step_match.group(1))
+                step_title = step_match.group(2).strip()
+                step_content = step_match.group(3)
+
+                # Extract step details
+                step_data = {
+                    'step_id': step_num,
+                    'title': step_title,
+                    'reasoning': '',
+                    'evidence': '',
+                    'confidence': None,
+                    'alternatives': '',
+                    'dependencies': ''
+                }
+
+                # Parse step content for structured data
+                reasoning_match = re.search(r'\*\*Reasoning\*\*:\s*([^\n]+)', step_content, re.IGNORECASE)
+                if reasoning_match:
+                    step_data['reasoning'] = reasoning_match.group(1).strip()
+
+                evidence_match = re.search(r'\*\*Evidence\*\*:\s*([^\n]+)', step_content, re.IGNORECASE)
+                if evidence_match:
+                    step_data['evidence'] = evidence_match.group(1).strip()
+
+                confidence_match = re.search(r'\*\*Confidence\*\*:\s*(\d+)/10', step_content, re.IGNORECASE)
+                if confidence_match:
+                    step_data['confidence'] = float(confidence_match.group(1)) / 10
+
+                alternatives_match = re.search(r'\*\*Alternatives Considered\*\*:\s*([^\n]+)', step_content, re.IGNORECASE)
+                if alternatives_match:
+                    step_data['alternatives'] = alternatives_match.group(1).strip()
+
+                dependencies_match = re.search(r'\*\*Dependencies\*\*:\s*([^\n]+)', step_content, re.IGNORECASE)
+                if dependencies_match:
+                    step_data['dependencies'] = dependencies_match.group(1).strip()
+
+                reasoning_chain['steps'].append(step_data)
+
+    # Extract overall confidence from final synthesis
+    overall_confidence_match = re.search(r'\*\*Overall.*?Confidence\*\*:\s*(\d+)/10', agent_reasoning, re.IGNORECASE)
+    if overall_confidence_match:
+        reasoning_chain['overall_confidence'] = float(overall_confidence_match.group(1)) / 10
+
+    return reasoning_chain if reasoning_chain['steps'] else None
+
+def extract_decision_synthesis(agent_reasoning: str) -> Dict[str, Any]:
+    """Extract decision synthesis chain from trade-orchestrator output."""
+    synthesis = {}
+
+    # Look for decision synthesis section
+    synthesis_pattern = r'## DECISION SYNTHESIS CHAIN(.*?)(?=##|$)'
+    match = re.search(synthesis_pattern, agent_reasoning, re.DOTALL | re.IGNORECASE)
+
+    if match:
+        synthesis_content = match.group(1)
+
+        # Extract consolidation process
+        consolidation_data = {}
+        proposer_weight = re.search(r'\*\*Proposer Input Weight\*\*:\s*(\d+)%\s*-\s*([^\n]+)', synthesis_content, re.IGNORECASE)
+        if proposer_weight:
+            consolidation_data['proposer_weight'] = int(proposer_weight.group(1))
+            consolidation_data['proposer_rationale'] = proposer_weight.group(2).strip()
+
+        counterer_weight = re.search(r'\*\*Counterer Input Weight\*\*:\s*(\d+)%\s*-\s*([^\n]+)', synthesis_content, re.IGNORECASE)
+        if counterer_weight:
+            consolidation_data['counterer_weight'] = int(counterer_weight.group(1))
+            consolidation_data['counterer_rationale'] = counterer_weight.group(2).strip()
+
+        if consolidation_data:
+            synthesis['consolidation_process'] = consolidation_data
+
+        # Extract decision tree scenarios
+        decision_tree = {}
+        primary_scenario = re.search(r'\*\*Primary Path\*\*\s*\((\d+)%\s*probability\):\s*([^\n]+)', synthesis_content, re.IGNORECASE)
+        if primary_scenario:
+            decision_tree['primary_scenario'] = {
+                'probability': float(primary_scenario.group(1)) / 100,
+                'outcome': primary_scenario.group(2).strip()
+            }
+
+        # Extract alternative scenarios
+        alt_scenarios = []
+        scenario_pattern = r'-\s*Scenario [A-Z]\s*\((\d+)%\s*probability\):\s*([^\n]+)'
+        for scenario_match in re.finditer(scenario_pattern, synthesis_content, re.IGNORECASE):
+            alt_scenarios.append({
+                'probability': float(scenario_match.group(1)) / 100,
+                'outcome': scenario_match.group(2).strip()
+            })
+
+        if alt_scenarios:
+            decision_tree['alternative_scenarios'] = alt_scenarios
+
+        if decision_tree:
+            synthesis['decision_tree'] = decision_tree
+
+        # Extract synthesis logic
+        synthesis_logic = re.search(r'\*\*Synthesis Logic\*\*:\s*([^\n]+)', synthesis_content, re.IGNORECASE)
+        if synthesis_logic:
+            synthesis['synthesis_logic'] = synthesis_logic.group(1).strip()
+
+    return synthesis if synthesis else None
+
 def extract_structured_analysis(agent_reasoning: str, context: str) -> Dict[str, Any]:
     """Extract structured data from agent reasoning for database triggers."""
     structured = {}
     combined_text = f"{agent_reasoning} {context}".lower()
-    
+
+    # NEW: Extract reasoning chain analysis for enhanced memory depth
+    reasoning_chain = extract_reasoning_chain(agent_reasoning)
+    if reasoning_chain:
+        structured['reasoning_chain'] = reasoning_chain
+
+    # NEW: Extract decision synthesis (from trade-orchestrator)
+    decision_synthesis = extract_decision_synthesis(agent_reasoning)
+    if decision_synthesis:
+        structured['decision_synthesis'] = decision_synthesis
+
     # Extract recommendations/actions
     if 'trade orchestrator' in combined_text or 'final verdict' in combined_text:
         # Trade orchestrator output - extract final recommendation
@@ -377,23 +513,23 @@ def update_portfolio_ribs(portfolio_action: Dict[str, Any], event_id: str, db_co
             # Get current running balance
             cursor.execute("SELECT running_balance FROM v_funding ORDER BY transaction_time DESC LIMIT 1")
             result = cursor.fetchone()
-            current_balance = result[0] if result else 0.0
-            
+            current_balance = float(result[0]) if result else 0.0
+
             # Calculate new running balance
             if data['transaction_type'] == 'DEPOSIT':
-                new_balance = current_balance + data['amount']
+                new_balance = current_balance + float(data['amount'])
             else:  # WITHDRAWAL
-                new_balance = current_balance - data['amount']
+                new_balance = current_balance - float(data['amount'])
             
             # Insert funding record
             cursor.execute("""
                 INSERT INTO v_funding (
-                    transaction_type, amount, transaction_time, description, 
+                    transaction_type, amount, transaction_time, description,
                     running_balance, source_event_id
                 ) VALUES (%s, %s, %s, %s, %s, %s)
             """, (
                 data['transaction_type'],
-                data['amount'],
+                float(data['amount']),
                 datetime.now(timezone.utc),
                 data['description'],
                 new_balance,
@@ -410,16 +546,16 @@ def update_portfolio_ribs(portfolio_action: Dict[str, Any], event_id: str, db_co
                     strategy, source_event_id
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                data['symbol'], data['side'], data['quantity'], data['price'],
-                data['total_value'], datetime.now(timezone.utc),
+                data['symbol'], data['side'], int(data['quantity']), float(data['price']),
+                float(data['total_value']), datetime.now(timezone.utc),
                 data['strategy'], event_id
             ))
             
             # Update or create position
             if data['side'] == 'BUY':
-                shares_delta = data['quantity']
+                shares_delta = int(data['quantity'])
             else:  # SELL
-                shares_delta = -data['quantity']
+                shares_delta = -int(data['quantity'])
             
             cursor.execute("""
                 INSERT INTO v_positions (symbol, shares, avg_cost, first_entry, last_activity, source_events)
@@ -436,7 +572,7 @@ def update_portfolio_ribs(portfolio_action: Dict[str, Any], event_id: str, db_co
                     last_activity = EXCLUDED.last_activity,
                     source_events = array_append(v_positions.source_events, %s)
             """, (
-                data['symbol'], shares_delta, data['price'], 
+                data['symbol'], shares_delta, float(data['price']),
                 datetime.now(timezone.utc), datetime.now(timezone.utc),
                 [event_id], event_id
             ))
